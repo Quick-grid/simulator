@@ -172,9 +172,10 @@ export class BotBrain {
     const debug = typeof window !== 'undefined' && window.DEBUG_BOT_AI && !debugBotTarget;
     const trace = this.raceTrace && { tick, position, proposals: [] };
     const inputs = driveGt3(this.car, trackPath, width, trackCondition, position,
-      (preferred, desiredSpeed, lateralBudget, recovering, approachingBend) => this.planner.plan({
+      (preferred, desiredSpeed, lateralBudget, recovering, approachingBend, tightDistance) => this.planner.plan({
         ego: position, field: state.botField ?? cars.map(car => racePosition(car, trackPath)),
-        length: totalTrackLength, width, preferred, desiredSpeed, lateralBudget, tick, recovering, approachingBend, trace,
+        length: totalTrackLength, width, preferred, desiredSpeed, lateralBudget, tick, recovering,
+        approachingBend, tightDistance, trace,
         trackPoint: (distance, offset) => trackOffsetPoint(trackPath, distance, offset)
       }), debug, trace);
     if (trace) this.raceTrace(trace);

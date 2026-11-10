@@ -2,6 +2,7 @@ import { sampleTrackDistance } from '../brakingBoards.js';
 import { FORCA_FREIO_MAX, GT3_WHEELBASE, MAX_INTERNAL_SPEED } from '../constants.js';
 
 export const BOT_TICK_HZ = 60;
+export const REJOIN_LOOKAHEAD = 5;
 const profiles = new WeakMap();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const angleDelta = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
@@ -34,7 +35,7 @@ export function racePosition(car, path, projection) {
     lateralSpeed: BOT_TICK_HZ * (car.vx * a.normalX + car.vy * a.normalY),
     radius: car.radius,
     order: car.gridSlot,
-    x: car.x, y: car.y, angle: car.angle,
+    x: car.x, y: car.y, angle: car.angle, yawRate: car.yawRate, steerAmount: car.steerAmount,
     vx: car.vx * BOT_TICK_HZ, vy: car.vy * BOT_TICK_HZ,
     id: car.participantId
   };
@@ -57,6 +58,10 @@ function getSpeedProfile(path, wet) {
   const curvature = new Float64Array(count);
   const speeds = new Float64Array(count);
   const bendDistance = new Float64Array(count);
+  const signedTurns = new Float64Array(count);
+  const tightTurn = new Int8Array(count);
+  const tightDistance = new Float64Array(count);
+  const cornerSetup = new Float64Array(count);
   const brake = FORCA_FREIO_MAX * (wet ? 0.43 : 0.55);
   const length = path.at(-1).cumulativeDistance + path.at(-1).segmentLength;
   for (let i = 0; i < count; i++) {
@@ -65,6 +70,7 @@ function getSpeedProfile(path, wet) {
     const before = path[(i - 3 + count) % count], after = path[(i + 3) % count];
     const span = (after.cumulativeDistance - before.cumulativeDistance + length) % length;
     const turn = angleDelta(after.angle, before.angle) / Math.max(1, span);
+    signedTurns[i] = turn;
     curvature[i] = Math.max(Math.abs(turn), (p.smoothedCurvature ?? 0) * 0.74);
     const lateralBudget = wet ? 0.013 : 0.018;
     const cornerSpeed = Math.sqrt(lateralBudget / Math.max(0.001, curvature[i] - 0.001));
@@ -72,15 +78,31 @@ function getSpeedProfile(path, wet) {
   }
   // Repeat the backwards pass for braking zones that straddle the finish line.
   let distanceToBend = Infinity;
+  let distanceToTightTurn = Infinity;
+  let distanceToReversal = Infinity;
+  let tightSide = 0;
   for (let pass = 0; pass < 2; pass++) {
     for (let i = count - 1; i >= 0; i--) {
       const entrySpeed = Math.sqrt(speeds[(i + 1) % count] ** 2 + 2 * brake * path[i].segmentLength);
       speeds[i] = Math.min(speeds[i], entrySpeed);
       distanceToBend = curvature[i] > 0.048 ? 0 : distanceToBend + path[i].segmentLength;
       bendDistance[i] = distanceToBend;
+      distanceToTightTurn += path[i].segmentLength;
+      distanceToReversal += path[i].segmentLength;
+      if (Math.abs(signedTurns[i]) > 0.067) {
+        const side = Math.sign(signedTurns[i]);
+        if (tightSide && side !== tightSide) distanceToReversal = distanceToTightTurn;
+        distanceToTightTurn = 0;
+        tightSide = side;
+      }
+      tightTurn[i] = distanceToTightTurn < 66 ? tightSide : 0;
+      tightDistance[i] = distanceToTightTurn;
+      // Stay near the centre when the next corner reverses the steering lock.
+      cornerSetup[i] = tightTurn[i]
+        ? tightSide * clamp((distanceToReversal - distanceToTightTurn - 22) / 14, 0, 1) : 0;
     }
   }
-  const profile = { speeds, curvature, bendDistance };
+  const profile = { speeds, curvature, bendDistance, tightTurn, tightDistance, cornerSetup };
   cached.set(wet, profile);
   return profile;
 }
@@ -88,7 +110,7 @@ function getSpeedProfile(path, wet) {
 export function driveGt3(car, path, width, condition, position, chooseManeuver, debug = false, trace) {
   const speed = Math.hypot(car.vx, car.vy);
   const wet = condition === 'wet';
-  const { speeds, curvature, bendDistance } = getSpeedProfile(path, wet);
+  const { speeds, curvature, bendDistance, tightTurn, tightDistance, cornerSetup } = getSpeedProfile(path, wet);
   const { d, lateralSpeed, index } = position;
   const edge = Math.max(0, width / 2 - car.radius - 0.4);
   const recovering = Math.abs(d) > edge || car.currentSurface !== 'TARMAC';
@@ -109,16 +131,23 @@ export function driveGt3(car, path, width, condition, position, chooseManeuver, 
   if (recovering) speedLimit = Math.min(speedLimit, car.currentSurface === 'GRAVEL' ? 0.17 : 0.32);
   else if (edgeRisk > 0) speedLimit *= Math.max(0.45, 1 - edgeRisk * 0.13);
 
-  const preferred = recovering || edgeRisk > 0 ? 0 : clamp(car.baseOffset * 0.30, -edge, edge);
+  // A tight inside offset can require more steering lock than the car has.
+  // Set up on the outside while the wheels are still on the approach.
+  const setupOffset = -cornerSetup[index] * Math.min(3.5, edge * 0.45);
+  const preferred = recovering || edgeRisk > 0 ? 0 : clamp(setupOffset + car.baseOffset * 0.30, -edge, edge);
   const lateralBudget = (wet ? 4 : 6) / (1 + turn * 20);
   if (trace) Object.assign(trace, { envelopeSpeed: speedLimit * BOT_TICK_HZ, curvature: turn, recovering });
   const approachingBend = bendDistance[index] < Math.max(100, position.speed * 4.8);
-  const plan = chooseManeuver?.(preferred, speedLimit * BOT_TICK_HZ, lateralBudget, recovering, approachingBend);
+  const plan = chooseManeuver?.(preferred, speedLimit * BOT_TICK_HZ, lateralBudget, recovering, approachingBend, tightDistance[index]);
   speedLimit = Math.min(speedLimit, (plan?.speedLimit ?? Infinity) / BOT_TICK_HZ);
-  const lookahead = recovering ? 9 : Math.max(6, clamp(8 + 18 * speed, 8, 28) / (1 + turn * 12));
+  const lookahead = plan?.action === 'rejoin' ? REJOIN_LOOKAHEAD
+    : recovering ? 9 : Math.max(6, clamp(8 + 18 * speed, 8, 28) / (1 + turn * 12));
   const steerPoint = sampleTrackDistance(path, position.s + lookahead);
-  const steeringPreview = clamp(lookahead / Math.max(1, position.speed), 0.35, 0.80);
-  const targetOffset = clamp(plan?.steeringOffsetAt?.(steeringPreview) ?? plan?.offset ?? preferred, -edge, edge);
+  const settingUpCorner = plan?.cornerSetup && tightTurn[index];
+  const steeringPreview = clamp(lookahead / Math.max(1, position.speed),
+    settingUpCorner ? 1.15 : 0.35, settingUpCorner ? 1.30 : 0.80);
+  const targetOffset = clamp((plan?.action === 'rejoin' ? plan.offset : plan?.steeringOffsetAt?.(steeringPreview))
+    ?? plan?.offset ?? preferred, -edge, edge);
   const normalX = -Math.sin(steerPoint.angle), normalY = Math.cos(steerPoint.angle);
   const steerTargetX = steerPoint.x + normalX * targetOffset;
   const steerTargetY = steerPoint.y + normalY * targetOffset;

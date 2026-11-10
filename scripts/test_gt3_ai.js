@@ -150,6 +150,24 @@ test('entry to a tight bend gives the slower car priority and preserves a checke
   assert.ok(plan.speedLimit < ego.speed);
 });
 
+test('a faster car closing from the rear does not stop a car holding its line in a bend', () => {
+  const ego = racer('ego', 100, -4.5, 5, 1.1);
+  const rear = racer('rear', 85.5, -1.25, 17);
+  const plan = new RacePlanner().plan({ ...base, ego, field: [ego, rear], approachingBend: true,
+    desiredSpeed: 17.5, lateralBudget: 1.4 });
+  assert.ok(plan.speedLimit >= ego.speed);
+});
+
+test('tight-turn entry waits upstream and releases with hysteresis as the leader clears', () => {
+  const ego = racer('ego', 100, 0, 5);
+  const planner = new RacePlanner();
+  const atEntry = { ...base, ego, approachingBend: true, tightDistance: 11, desiredSpeed: 25 };
+  const choose = (gap, tick) => planner.plan({ ...atEntry, tick, field: [ego, racer('leader', 100 + gap, 0, 12)] });
+  assert.equal(choose(22, 1).speedLimit, 0);
+  assert.equal(choose(26, 2).speedLimit, 0);
+  assert.ok(choose(30, 3).speedLimit > 10);
+});
+
 test('a stationary rear car yields while the front car releases a soft-margin impasse', () => {
   const fixed = (id, x, order) => ({ ...racer(id, x, 0, 0), x, y: 0, vx: 0, vy: 0, angle: 0, order });
   const front = fixed('front', 100, 0), rear = fixed('rear', 95.4, 1);

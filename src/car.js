@@ -23,6 +23,7 @@ export class Car {
     this.color = color;
     this.name = name;        // Nome interno para display/HUD (NÃO exposto no dataset)
     this.isBot = isBot;
+    this.gridSlot = index;
     this.isAuto = isBot ? true : isAuto;
     this.radius = 1.6; // Metros
     // participantId anônimo para dataset de ML — nunca contém nome/email/conta
@@ -315,7 +316,7 @@ export class Car {
     if (this.isBot) {
       // --- CONTROLE INTELIGENTE VIA MACHINE LEARNING (BotBrain) ---
       if (this.brain) {
-        const inputs = this.brain.computeInputs();
+        const inputs = this.brain.computeInputs({ segmentIdx, segmentT });
         throttleInput = inputs.throttleInput;
         brakeInput = inputs.brakeInput;
         steerInput = inputs.steerInput;

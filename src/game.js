@@ -1,12 +1,13 @@
 import { canvas, ctx } from './canvas.js';
 import { BOT_CONFIGS } from './constants.js';
+import { racePosition } from './ai/gt3Driver.js';
 import { F1_TRACKS } from './f1Tracks.js';
 import { Car } from './car.js';
 import { generateTrackPath, drawTrack } from './track.js';
 import { updateHUD, showVictoryScreen, drawGhosts } from './ui.js';
 import { mainCamera } from './camera.js';
 import { drawMinimap } from './minimap.js';
-import { fetchTrackRecords, saveTrackRecords, fetchBotTrainingData, saveBotTrainingData, fetchBotOffsetMemory, saveBotOffsetMemory } from './api.js';
+import { fetchTrackRecords, saveTrackRecords } from './api.js';
 import { drawBotDebugOverlay } from './ai.js';
 import { mlTelemetry, mlTelemetryV3, onlineUploader, telemetryPerformance } from './ml/telemetry/index.js';
 import { getRenderBounds, withinRenderBounds } from './renderGeometry.js';
@@ -21,6 +22,7 @@ import { getPilotName } from './auth.js';
 export const state = {
   keys: {},
   cars: [],
+  botField: null,
   finishedCarsOrder: [],
   trackPath: [],
   rawWaypoints: [],
@@ -130,22 +132,19 @@ export function syncRecordToBackend() {
   });
 }
 
-function syncBotTrainingEndRace() {
-  const botStats = {};
-  const aiModels = {};
-  state.cars.filter(c => c.isBot).forEach(bot => {
-    botStats[bot.name] = {
-      treats: bot.petTreats || 0,
-      discipline: bot.discipline || 1.0,
-      skill: bot.botSkill || 1.0,
-      cleanLaps: Math.max(0, bot.currentLap - 1)
-    };
-    if (bot.brain) {
-      aiModels[bot.name] = bot.brain.exportModel();
-    }
-  });
-  saveBotTrainingData(botStats);
-  saveBotOffsetMemory(aiModels);
+function finishPilotRuns(reason) {
+  for (const car of state.cars) car.brain?.run?.finish(reason);
+}
+
+export function integrateOfflineCars() {
+  updateAerodynamicWake(state.cars);
+  state.botField = state.cars.some(car => car.brain?.driver === 'gt3')
+    ? state.cars.map(car => racePosition(car, state.trackPath)) : null;
+  try {
+    state.cars.forEach(car => car.update());
+  } finally {
+    state.botField = null;
+  }
 }
 
 // ========== COLLISIONS ==========
@@ -158,6 +157,8 @@ export function handleCarCollisions() {
       let minDist = c1.radius + c2.radius;
 
       if (dist < minDist && dist > 0) {
+        if (!c1.finished || c1.brain?.pendingCheckpoint === 0) c1.brain?.run?.contact();
+        if (!c2.finished || c2.brain?.pendingCheckpoint === 0) c2.brain?.run?.contact();
         let nx = dx / dist, ny = dy / dist, overlap = minDist - dist;
         c1.x -= nx * overlap * 0.5; c1.y -= ny * overlap * 0.5;
         c2.x += nx * overlap * 0.5; c2.y += ny * overlap * 0.5;
@@ -190,7 +191,7 @@ function checkRaceEnd() {
     state.raceFinished = true;
     if (mlTelemetry.enabled) mlTelemetry.stop();
     if (mlTelemetryV3.enabled) mlTelemetryV3.stop();
-    syncBotTrainingEndRace();
+    finishPilotRuns('completed');
     syncRecordToBackend();
     showVictoryScreen();
   }
@@ -207,7 +208,7 @@ function finishRaceByTimeout() {
         state.finishedCarsOrder.push(car);
       }
     });
-    syncBotTrainingEndRace();
+    finishPilotRuns('timeout');
     syncRecordToBackend();
     showVictoryScreen();
   }
@@ -239,6 +240,7 @@ export function clearRecords() {
 
 export function backToMenu() {
   cancelAnimationFrame(animationFrameId);
+  finishPilotRuns('menu');
   animationFrameId = null;
   renderPoses.reset();
   raceStart.reset();
@@ -314,10 +316,7 @@ export async function startGame(settings) {
 
     resizeCanvas();
     generateTrackPath(state.selectedTrack);
-    // Independent requests prepare the grid together instead of blocking each other.
-    const [, botTrainingHistory, botOffsetMemory] = state.onlineSession ? [null, null, null] : await Promise.all([
-      loadRecords(state.selectedTrack, state.totalLaps), fetchBotTrainingData(), fetchBotOffsetMemory()
-    ]);
+    if (!state.onlineSession) await loadRecords(state.selectedTrack, state.totalLaps);
 
     state.cars = []; state.particles = []; state.skidMarks = []; state.floatingNotices = [];
     renderPoses.reset();
@@ -345,22 +344,11 @@ export async function startGame(settings) {
     // Bots / Adversários: posicionados nos slots 0 até numBots - 1 (à frente do jogador)
     if (state.gameMode === 'race' && !state.onlineSession) {
       for (let i = 0; i < numBots; i++) {
-        let bCfg = BOT_CONFIGS[i % BOT_CONFIGS.length];
-        let botCar = new Car(bCfg.color, bCfg.name, true, i, true);
-
-        // Injetar memória de treino do backend
-        if (botTrainingHistory && botTrainingHistory.bots && botTrainingHistory.bots[bCfg.name]) {
-          const saved = botTrainingHistory.bots[bCfg.name];
-          botCar.petTreats = saved.treats || 0;
-          botCar.discipline = saved.discipline || 1.0;
-          botCar.botSkill = Math.max(botCar.botSkill, saved.skill || botCar.botSkill);
-        }
-
-        // Injetar cérebro de Machine Learning salvo (RL persistente entre corridas)
-        if (botOffsetMemory && botOffsetMemory[bCfg.name] && botCar.brain) {
-          botCar.brain.importModel(botOffsetMemory[bCfg.name]);
-        }
-
+        const bCfg = BOT_CONFIGS[i % BOT_CONFIGS.length];
+        const botCar = new Car(bCfg.color, bCfg.name, true, i, true);
+        botCar.brain.startPilotRun(bCfg.pilotId, {
+          trackId: state.selectedTrack, condition: state.trackCondition, difficulty: state.botDifficulty
+        });
         state.cars.push(botCar);
       }
     }
@@ -426,9 +414,9 @@ function gameLoop(now = performance.now(), presentPaused = false) {
     // Capture ALL cars before advancing any of them; collisions still run on
     // the authoritative positions, never on the interpolated presentation.
     state.cars.forEach(car => renderPoses.capture(car));
-    updateAerodynamicWake(state.cars);
-    state.cars.forEach(car => car.update());
+    integrateOfflineCars();
     handleCarCollisions();
+    for (const car of state.cars) car.brain?.finishPilotTick();
     physicsAccumulator -= PHYSICS_STEP_MS;
     physicsTickTime += PHYSICS_STEP_MS;
     // Capturar telemetria DENTRO do tick físico: state(t) e action(t) são do mesmo frame.

@@ -5,11 +5,14 @@
 
 import { NUM_CHECKPOINTS, MAX_INTERNAL_SPEED, BOT_DRIVER_MODE } from './constants.js';
 import { state } from './game.js';
+import { BOT_TICK_HZ, driveGt3, racePosition, trackOffsetPoint } from './ai/gt3Driver.js';
+import { RacePlanner } from './ai/racePlanner.js';
+import { GT3_DRIVER_VERSION, PilotRun } from './ai/pilotMemory.js';
 
 // ── DRIVER MODE FEATURE FLAG & BASELINE ──────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.BOT_DRIVER_MODE = window.BOT_DRIVER_MODE || BOT_DRIVER_MODE.DETERMINISTIC;
-  window.AI_VERSION = "CONTROL_TRACE_V1";
+  window.AI_VERSION = window.BOT_DRIVER_MODE === BOT_DRIVER_MODE.LEGACY ? 'CONTROL_TRACE_V1' : GT3_DRIVER_VERSION;
 }
 let hasLoggedAiVersion = false;
 export let debugBotTarget = null; // preenchido pelo primeiro bot a cada frame
@@ -18,6 +21,10 @@ export class BotBrain {
   constructor(car) {
     this.car = car;
     this.name = car.name;
+    this.driver = typeof window !== 'undefined' && window.BOT_DRIVER_MODE === BOT_DRIVER_MODE.LEGACY
+      ? 'legacy' : 'gt3';
+    this.planner = new RacePlanner();
+    this.tick = 0;
 
     // Hiperparâmetros de Aprendizado por Reforço (RL)
     this.learningRate = 0.14;
@@ -88,6 +95,8 @@ export class BotBrain {
 
   // Atualização de Aprendizado ao Cruzar Checkpoint
   onCheckpointCrossed(checkpointIdx, currentSpeed, currentRank, isGravel) {
+    if (this.run) this.pendingCheckpoint = checkpointIdx;
+    if (this.driver !== 'legacy') return;
     const prevSectorIdx = (checkpointIdx - 1 + NUM_CHECKPOINTS) % NUM_CHECKPOINTS;
     const sector = this.sectors[prevSectorIdx];
     const now = performance.now();
@@ -153,7 +162,42 @@ export class BotBrain {
   }
 
   // Tomada de Decisão em Tempo Real a 60 FPS
-  computeInputs() {
+  computeInputs(projection) {
+    if (this.driver === 'legacy') return this.computeLegacyInputs();
+    const { trackPath, selectedTrackData, trackCondition, totalTrackLength, cars } = state;
+    if (!trackPath.length) return { throttleInput: 0, brakeInput: 1, steerInput: 0 };
+    const position = racePosition(this.car, trackPath, projection);
+    const width = selectedTrackData?.trackWidth || 24;
+    const tick = ++this.tick;
+    const debug = typeof window !== 'undefined' && window.DEBUG_BOT_AI && !debugBotTarget;
+    const trace = this.raceTrace && { tick, position, proposals: [] };
+    const inputs = driveGt3(this.car, trackPath, width, trackCondition, position,
+      (preferred, desiredSpeed, lateralBudget, recovering, approachingBend) => this.planner.plan({
+        ego: position, field: state.botField ?? cars.map(car => racePosition(car, trackPath)),
+        length: totalTrackLength, width, preferred, desiredSpeed, lateralBudget, tick, recovering, approachingBend, trace,
+        trackPoint: (distance, offset) => trackOffsetPoint(trackPath, distance, offset)
+      }), debug, trace);
+    if (trace) this.raceTrace(trace);
+    if (inputs.debug) debugBotTarget = inputs.debug;
+    this.maneuver = inputs.plan?.action;
+    this.run?.record({
+      ...inputs, position, maneuver: this.maneuver, surface: this.car.currentSurface,
+      speed: Math.hypot(this.car.vx, this.car.vy) * BOT_TICK_HZ, rearSlip: this.car.rearSlip
+    });
+    return inputs;
+  }
+
+  startPilotRun(pilotId, context) {
+    if (this.driver === 'gt3') this.run = new PilotRun(pilotId, context);
+  }
+
+  finishPilotTick() {
+    if (this.pendingCheckpoint === undefined) return;
+    this.run.checkpoint(this.pendingCheckpoint);
+    this.pendingCheckpoint = undefined;
+  }
+
+  computeLegacyInputs() {
     if (!hasLoggedAiVersion) {
       hasLoggedAiVersion = true;
       console.log('[AI CONTROL TRACE V1 ACTIVE] Speed profile, dynamic stability, and track-aware traffic loaded.');

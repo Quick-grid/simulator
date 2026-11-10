@@ -12,7 +12,8 @@ export const GRAVEL_HANDLING = Object.freeze({ lowSpeedDrag: 0.985, highSpeedDra
 export const TRACK_WIDTH = 24;          // 24 metros de largura média FIA ampliada
 export const NUM_CHECKPOINTS = 16;       // Checkpoints para circuitos de 4 a 7 km
 export const BOT_DRIVER_MODE = {
-  DETERMINISTIC: 'DETERMINISTIC', // Baseline determinístico atual (Padrão ativo e fallback permanente)
+  DETERMINISTIC: 'DETERMINISTIC', // Controlador GT3 determinístico ativo
+  LEGACY: 'LEGACY',              // Controlador anterior, selecionável antes da largada
   ML_SHADOW: 'ML_SHADOW',         // Modo Sombra: ML avalia o estado em paralelo sem assumir controle
   ML: 'ML'                        // Modo ML Ativo: ML atua nos comandos com fallback determinístico
 };
@@ -53,24 +54,24 @@ export const GEAR_POWER = [0, 0.028, 0.024, 0.021, 0.018, 0.016, 0.014];
 
 // Pilotos Adversários da F1 / GT3 com Capacidades e Cores Reais (Grid Completo de 20 Pilotos)
 export const BOT_CONFIGS = [
-  { color: '#ffd700', name: 'A. Senna' },
-  { color: '#3388ff', name: 'M. Verstappen' },
-  { color: '#ff33ff', name: 'L. Hamilton' },
-  { color: '#e10600', name: 'C. Leclerc' },
-  { color: '#00e5ff', name: 'F. Alonso' },
-  { color: '#ff8000', name: 'L. Norris' },
-  { color: '#00d2be', name: 'G. Russell' },
-  { color: '#ff3b30', name: 'C. Sainz' },
-  { color: '#ff9500', name: 'O. Piastri' },
-  { color: '#005aff', name: 'S. Perez' },
-  { color: '#2b7fff', name: 'P. Gasly' },
-  { color: '#ff69b4', name: 'E. Ocon' },
-  { color: '#5ac8fa', name: 'Y. Tsunoda' },
-  { color: '#00a3e0', name: 'A. Albon' },
-  { color: '#34c759', name: 'V. Bottas' },
-  { color: '#af52de', name: 'N. Hulkenberg' },
-  { color: '#5856d6', name: 'L. Stroll' },
-  { color: '#ffcc00', name: 'D. Ricciardo' },
-  { color: '#ff2d55', name: 'M. Schumacher' },
-  { color: '#007aff', name: 'A. Prost' }
+  { pilotId: 'senna', color: '#ffd700', name: 'A. Senna' },
+  { pilotId: 'verstappen', color: '#3388ff', name: 'M. Verstappen' },
+  { pilotId: 'hamilton', color: '#ff33ff', name: 'L. Hamilton' },
+  { pilotId: 'leclerc', color: '#e10600', name: 'C. Leclerc' },
+  { pilotId: 'alonso', color: '#00e5ff', name: 'F. Alonso' },
+  { pilotId: 'norris', color: '#ff8000', name: 'L. Norris' },
+  { pilotId: 'russell', color: '#00d2be', name: 'G. Russell' },
+  { pilotId: 'sainz', color: '#ff3b30', name: 'C. Sainz' },
+  { pilotId: 'piastri', color: '#ff9500', name: 'O. Piastri' },
+  { pilotId: 'perez', color: '#005aff', name: 'S. Perez' },
+  { pilotId: 'gasly', color: '#2b7fff', name: 'P. Gasly' },
+  { pilotId: 'ocon', color: '#ff69b4', name: 'E. Ocon' },
+  { pilotId: 'tsunoda', color: '#5ac8fa', name: 'Y. Tsunoda' },
+  { pilotId: 'albon', color: '#00a3e0', name: 'A. Albon' },
+  { pilotId: 'bottas', color: '#34c759', name: 'V. Bottas' },
+  { pilotId: 'hulkenberg', color: '#af52de', name: 'N. Hulkenberg' },
+  { pilotId: 'stroll', color: '#5856d6', name: 'L. Stroll' },
+  { pilotId: 'ricciardo', color: '#ffcc00', name: 'D. Ricciardo' },
+  { pilotId: 'schumacher', color: '#ff2d55', name: 'M. Schumacher' },
+  { pilotId: 'prost', color: '#007aff', name: 'A. Prost' }
 ];

@@ -44,6 +44,8 @@
     "test:ml35": "node scripts/test_ml35_runtime_dataset_contract.js",
     "test:ml36:capture": "node scripts/test_ml36_v3_capture.js",
     "test:boost-gravel": "node scripts/test_boost_gravel.js",
+    "test:ai:gt3": "node scripts/test_gt3_ai.js",
+    "benchmark:ai:gt3": "node scripts/benchmark_gt3_bots.js",
     "build": "vite build",
     "preview": "vite preview",
     "online:lan": "vite preview --host 0.0.0.0 --port 4173 --strictPort"
